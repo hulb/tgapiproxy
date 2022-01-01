@@ -1,75 +1,41 @@
 package main
 
 import (
-	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
-	"os/signal"
-	"time"
 )
 
-// MyHandler simple handler
-type MyHandler struct{}
+const telegramHost = "https://api.telegram.org"
 
-func (*MyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	s := time.Now()
-	fmt.Print("receive incoming request from ", r.RemoteAddr)
-	tghost := "https://api.telegram.org"
-	resp, err := http.Post(tghost+r.RequestURI, "application/json", nil)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
+var tgUrl *url.URL
 
-	data, err := ioutil.ReadAll(resp.Body)
+func init() {
+	var err error
+	tgUrl, err = url.Parse(telegramHost)
 	if err != nil {
-		fmt.Println(err)
-		return
+		panic(err)
 	}
-	_, err = w.Write(data)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Println(" -> proxyed, cost:", time.Now().Sub(s).Milliseconds(), "ms")
 }
 
 func main() {
-	mux := http.NewServeMux()
-	mux.Handle("/", &MyHandler{})
+	proxy := httputil.NewSingleHostReverseProxy(tgUrl)
+	proxy.Director = func(r *http.Request) {
+		r.URL.Scheme = tgUrl.Scheme
+		r.URL.Host = tgUrl.Host
+		r.Host = tgUrl.Host
+		r.Header.Del("X-Forwarded-For")
+	}
 
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8093"
 	}
 
-	server := &http.Server{
-		Addr:         ":" + port,
-		WriteTimeout: time.Second * 30,
-		ReadTimeout:  time.Second * 30,
-		Handler:      mux,
+	log.Println("server listen on ", port)
+	if err := http.ListenAndServe(":"+port, proxy); err != nil {
+		panic(err)
 	}
-
-	go func() {
-		fmt.Println("server listen at ", server.Addr)
-		if err := server.ListenAndServe(); err != nil {
-			log.Fatal(err)
-		}
-	}()
-
-	quit := make(chan os.Signal)
-	signal.Notify(quit, os.Interrupt)
-	signal.Notify(quit, os.Kill)
-
-	<-quit
-	if err := server.Close(); err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Println()
-	fmt.Println("server close")
 }
